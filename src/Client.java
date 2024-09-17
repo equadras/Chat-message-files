@@ -52,19 +52,9 @@ class ListenServer implements Runnable {
         }
     }
 
-    private void createReceivedFilesDirectory() {
-        File receivedFilesDir = new File("arquivos_recebidos");
-        if (!receivedFilesDir.exists()) {
-            if (receivedFilesDir.mkdir()) {
-                System.out.println("Diretório 'arquivos_recebidos' criado.");
-            }
-        }
-    }
-
     private void receiveFile(BufferedReader in, String fileName) {
         try {
             System.out.println("Recebendo arquivo: " + fileName);
-            createReceivedFilesDirectory();
 
             File file = new File("arquivos_recebidos" + File.separator + fileName);
             try (BufferedOutputStream fileOut = new BufferedOutputStream(new FileOutputStream(file))) {
@@ -134,13 +124,17 @@ class SendToServer implements Runnable {
 
         try {
             out.println("/send file " + recipient + " " + file.getName());
+
+            // Enviar o arquivo
             byte[] fileBytes = Files.readAllBytes(file.toPath());
             OutputStream socketOut = socket.getOutputStream();
             socketOut.write(fileBytes);
-            socketOut.flush();
+            socketOut.flush(); // Certifica que todos os dados são enviados
             System.out.println("Arquivo enviado com sucesso!");
+
         } catch (IOException e) {
             System.out.println("Erro ao enviar arquivo: " + e.getMessage());
         }
     }
+
 }

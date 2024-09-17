@@ -18,15 +18,16 @@ public class Server {
         // Tentar abrir o arquivo de log para escrita
         try (PrintWriter logWriter = new PrintWriter(new FileWriter(logFile, true))) {
             while (true) {
-                // Aceitar uma nova conexão de cliente
+                //aceita connection com cliente
                 Socket clientSocket = serverSocket.accept();
                 String clientAddress = clientSocket.getInetAddress().getHostAddress();
 
-                // Iniciar nova thread para lidar com o cliente
+                // inicia nova thread ClientHandler
                 new Thread(new ClientHandler(clientSocket, clientAddress, logWriter)).start();
             }
         }
     }
+
 
     public static void showCommands() {
         System.out.println("\nComandos do Servidor:");
@@ -54,7 +55,7 @@ public class Server {
         @Override
         public void run() {
             try {
-                clientName = in.readLine(); // Receber o nome do cliente
+                clientName = in.readLine(); //  nome do cliente
                 logClientConnection(clientName, clientAddress, new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
 
                 //uma thread espera a outra para alterar o map
@@ -88,7 +89,6 @@ public class Server {
         }
 
         private void handleTextMessage(String message) {
-            //parsea o comando inteiro e divide num array
             String[] tokens = message.split(" ", 4);
             if (tokens.length < 4) {
                 out.println("Formato correto: /send message <destinatario> <mensagem>");
@@ -98,17 +98,14 @@ public class Server {
             String recipient = tokens[2];
             String textMessage = tokens[3];
 
+            //uma thread espera a outra para alterar o map
             synchronized (clients) {
                 if (clients.containsKey(recipient)) {
                     try {
                         //abre um OutputStream pro socket do destinatario
                         PrintWriter recipientOut = new PrintWriter(clients.get(recipient).getOutputStream(), true);
                         recipientOut.println(clientName + ": " + textMessage);
-
-                        // confirmação de sucesso para o remetente
                         out.println("Mensagem enviada para " + recipient + " com sucesso!");
-
-                        // registrar no log
                         logMessage(clientName, recipient, textMessage);
 
                     } catch (IOException e) {
@@ -120,43 +117,64 @@ public class Server {
             }
         }
 
+
         private void handleFileTransfer(String message) throws IOException {
             String[] tokens = message.split(" ", 4);
             if (tokens.length < 4) {
-                for (int i = 0; i < tokens.length; i++) {
-                    System.out.println(tokens[i]);
-                }
                 out.println("Formato incorreto: /send file <destinatario> <caminho do arquivo>");
                 return;
             }
 
             String recipient = tokens[2];
-            String filePath = tokens[3];
-            File file = new File(filePath);
-
-            if (!file.exists()) {
-                out.println("S: Arquivo não encontrado.");
-                return;
-            }
+            String fileName = tokens[3];
 
             synchronized (clients) {
                 if (clients.containsKey(recipient)) {
                     try {
-                        PrintWriter recipientOut = new PrintWriter(clients.get(recipient).getOutputStream(), true);
-                        recipientOut.println(clientName + " está enviando um arquivo: " + file.getName());
+                        InputStream socketIn = socket.getInputStream();
+                        saveReceivedFile(fileName, socketIn);
 
-                        byte[] fileBytes = Files.readAllBytes(file.toPath());
+                        PrintWriter recipientOut = new PrintWriter(clients.get(recipient).getOutputStream(), true);
+                        recipientOut.println("Arquivo recebido: " + fileName);
+
+                        byte[] fileBytes = Files.readAllBytes(new File("arquivos_recebidos" + File.separator + fileName).toPath());
                         OutputStream recipientStream = clients.get(recipient).getOutputStream();
                         recipientStream.write(fileBytes);
                         recipientStream.flush();
-                        out.println("S: Arquivo enviado com sucesso.");
 
-                        logMessage(clientName, recipient, "S: Arquivo enviado: " + file.getName());
+                        logMessage(clientName, recipient, "Arquivo enviado: " + fileName);
                     } catch (IOException e) {
-                        out.println("S: Erro ao enviar o arquivo para " + recipient);
+                        out.println("" + "Erro ao enviar o arquivo para " + recipient);
                     }
                 } else {
                     out.println("Usuário " + recipient + " não está conectado.");
+                }
+            }
+        }
+
+        private void saveReceivedFile(String fileName, InputStream socketIn) {
+            createReceivedFilesDirectory();
+            File file = new File("arquivos_recebidos" + File.separator + fileName);
+
+            try (BufferedOutputStream fileOut = new BufferedOutputStream(new FileOutputStream(file))) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while (socketIn.available() > 0 && (bytesRead = socketIn.read(buffer)) != -1) {
+                    fileOut.write(buffer, 0, bytesRead);
+                }
+                fileOut.flush();
+                System.out.println("Arquivo " + fileName + " salvo com sucesso em 'arquivos_recebidos'!");
+            } catch (IOException e) {
+                System.out.println("Erro ao salvar arquivo: " + e.getMessage());
+            }
+        }
+
+
+        private void createReceivedFilesDirectory() {
+            File receivedFilesDir = new File("arquivos_recebidos");
+            if (!receivedFilesDir.exists()) {
+                if (receivedFilesDir.mkdir()) {
+                    System.out.println("Diretório 'arquivos_recebidos' criado.");
                 }
             }
         }
