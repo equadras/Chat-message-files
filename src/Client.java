@@ -1,6 +1,5 @@
 import java.io.*;
 import java.net.Socket;
-import java.nio.file.Files;
 import java.util.Scanner;
 
 public class Client {
@@ -35,14 +34,15 @@ class ListenServer implements Runnable {
     @Override
     public void run() {
         try {
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            String message;
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            while (true) {
+                String message = in.readUTF();
 
-            while ((message = in.readLine()) != null) {
-                //System.out.println("Mensagem recebida: " + message);
-
-                if (message.startsWith(":Arquivo recebido:")) {
-                    receiveFile(in, message.split(":")[2].trim());
+                if (message.equals("Arquivo recebido")) {
+                    String sender = in.readUTF();
+                    String fileName = in.readUTF();
+                    long fileSize = in.readLong();
+                    receiveFile(sender, fileName, fileSize, in);
                 } else {
                     System.out.println(message);
                 }
@@ -52,16 +52,31 @@ class ListenServer implements Runnable {
         }
     }
 
-    private void receiveFile(BufferedReader in, String fileName) {
+    private void createReceivedFilesDirectory() {
+        File receivedFilesDir = new File("arquivos_recebidos");
+        if (!receivedFilesDir.exists()) {
+            if (receivedFilesDir.mkdir()) {
+                System.out.println("Diretório 'arquivos_recebidos' criado.");
+            }
+        }
+    }
+
+    private void receiveFile(String sender, String fileName, long fileSize, DataInputStream in) {
         try {
-            System.out.println("Recebendo arquivo: " + fileName);
+            System.out.println("Recebendo arquivo de " + sender + ": " + fileName);
+            createReceivedFilesDirectory();
 
             File file = new File("arquivos_recebidos" + File.separator + fileName);
-            try (BufferedOutputStream fileOut = new BufferedOutputStream(new FileOutputStream(file))) {
-                int bytesRead;
-                char[] buffer = new char[8192];
-                while ((bytesRead = in.read(buffer)) != -1) {
-                    fileOut.write(new String(buffer, 0, bytesRead).getBytes());
+            try (FileOutputStream fileOut = new FileOutputStream(file)) {
+                byte[] buffer = new byte[4096];
+                long bytesReadTotal = 0;
+
+                while (bytesReadTotal < fileSize) {
+                    int bytesToRead = (int) Math.min(buffer.length, fileSize - bytesReadTotal);
+                    int bytesRead = in.read(buffer, 0, bytesToRead);
+                    if (bytesRead == -1) break;
+                    fileOut.write(buffer, 0, bytesRead);
+                    bytesReadTotal += bytesRead;
                 }
                 System.out.println("Arquivo " + fileName + " salvo com sucesso em 'arquivos_recebidos'!");
             }
@@ -82,32 +97,47 @@ class SendToServer implements Runnable {
     public void run() {
         try {
             Scanner scanner = new Scanner(System.in);
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
 
             System.out.print("Digite seu nome: ");
             String name = scanner.nextLine();
-            out.println(name);
+            out.writeUTF(name);
+            out.flush();
 
             while (true) {
                 String message = scanner.nextLine();
+
                 if (message.equalsIgnoreCase("/sair")) {
-                    out.println("saindo...");
+                    out.writeUTF("/sair");
+                    out.flush();
                     socket.close();
                     break;
-                }
+                } else if (message.startsWith("/send message")) {
+                    String[] tokens = message.split(" ", 3);
+                    if (tokens.length >= 3) {
+                        String recipient = tokens[1];
+                        String textMessage = tokens[2];
 
-                if (message.startsWith("/send file")) {
+                        out.writeUTF("/send message");
+                        out.writeUTF(recipient);
+                        out.writeUTF(textMessage);
+                        out.flush();
+                    } else {
+                        System.out.println("Comando incorreto. Use: /send message <destinatario> <mensagem>");
+                    }
+                } else if (message.startsWith("/send file")) {
                     String[] tokens = message.split(" ", 4);
-                    if (tokens.length == 4) {
+                    if (tokens.length >= 4) {
                         sendFile(out, tokens[2], tokens[3]);
                     } else {
-                        for (int i = 0; i < tokens.length; i++) {
-                            System.out.println(tokens[i]);
-                        }
                         System.out.println("Comando incorreto. Use: /send file <destinatario> <caminho do arquivo>");
                     }
+                } else if (message.equals("/users")) {
+                    out.writeUTF("/users");
+                    out.flush();
                 } else {
-                    out.println(message);
+                    out.writeUTF(message);
+                    out.flush();
                 }
             }
         } catch (IOException e) {
@@ -115,7 +145,7 @@ class SendToServer implements Runnable {
         }
     }
 
-    private void sendFile(PrintWriter out, String recipient, String filePath) {
+    private void sendFile(DataOutputStream out, String recipient, String filePath) {
         File file = new File(filePath);
         if (!file.exists()) {
             System.out.println("Arquivo não encontrado no caminho: " + file.getAbsolutePath());
@@ -123,18 +153,23 @@ class SendToServer implements Runnable {
         }
 
         try {
-            out.println("/send file " + recipient + " " + file.getName());
+            out.writeUTF("/send file");
+            out.writeUTF(recipient);
+            out.writeUTF(file.getName());
+            out.writeLong(file.length());
+            out.flush();
 
-            // Enviar o arquivo
-            byte[] fileBytes = Files.readAllBytes(file.toPath());
-            OutputStream socketOut = socket.getOutputStream();
-            socketOut.write(fileBytes);
-            socketOut.flush(); // Certifica que todos os dados são enviados
+            byte[] buffer = new byte[4096];
+            try (FileInputStream fileIn = new FileInputStream(file)) {
+                int bytesRead;
+                while ((bytesRead = fileIn.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                }
+            }
+            out.flush();
             System.out.println("Arquivo enviado com sucesso!");
-
         } catch (IOException e) {
             System.out.println("Erro ao enviar arquivo: " + e.getMessage());
         }
     }
-
 }

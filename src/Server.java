@@ -1,6 +1,5 @@
 import java.io.*;
 import java.net.*;
-import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -18,16 +17,15 @@ public class Server {
         // Tentar abrir o arquivo de log para escrita
         try (PrintWriter logWriter = new PrintWriter(new FileWriter(logFile, true))) {
             while (true) {
-                //aceita connection com cliente
+                // Aceitar uma nova conexão de cliente
                 Socket clientSocket = serverSocket.accept();
                 String clientAddress = clientSocket.getInetAddress().getHostAddress();
 
-                // inicia nova thread ClientHandler
+                // Iniciar nova thread para lidar com o cliente
                 new Thread(new ClientHandler(clientSocket, clientAddress, logWriter)).start();
             }
         }
     }
-
 
     public static void showCommands() {
         System.out.println("\nComandos do Servidor:");
@@ -40,25 +38,24 @@ public class Server {
         private Socket socket;
         private String clientAddress;
         private String clientName;
-        private BufferedReader in;
-        private PrintWriter out;
+        private DataInputStream in;
+        private DataOutputStream out;
         private PrintWriter logWriter;
 
         public ClientHandler(Socket socket, String clientAddress, PrintWriter logWriter) throws IOException {
             this.socket = socket;
             this.clientAddress = clientAddress;
-            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            this.out = new PrintWriter(socket.getOutputStream(), true);
+            this.in = new DataInputStream(socket.getInputStream());
+            this.out = new DataOutputStream(socket.getOutputStream());
             this.logWriter = logWriter;
         }
 
         @Override
         public void run() {
             try {
-                clientName = in.readLine(); //  nome do cliente
+                clientName = in.readUTF(); // Receber o nome do cliente
                 logClientConnection(clientName, clientAddress, new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
 
-                //uma thread espera a outra para alterar o map
                 synchronized (clients) {
                     clients.put(clientName, socket);
                 }
@@ -66,19 +63,19 @@ public class Server {
                 System.out.println(clientName + " entrou no chat.");
                 broadcast(clientName + " entrou no chat.", null);
 
-                String message;
-                while ((message = in.readLine()) != null) {
-                    if (message.startsWith("/send message")) {
-                        handleTextMessage(message);
-                    }
-                    else if (message.startsWith("/send file")) {
-                        handleFileTransfer(message);
-                    }
-                    else if (message.equals("/users")) {
+                while (true) {
+                    String command = in.readUTF();
+                    if (command.equals("/send message")) {
+                        handleTextMessage();
+                    } else if (command.equals("/send file")) {
+                        handleFileTransfer();
+                    } else if (command.equals("/users")) {
                         listUsers();
-                    }
-                    else if (message.equals("/sair")) {
+                    } else if (command.equals("/sair")) {
                         break;
+                    } else {
+                        // Broadcast de mensagens normais
+                        broadcast(clientName + ": " + command, socket);
                     }
                 }
             } catch (IOException e) {
@@ -88,112 +85,89 @@ public class Server {
             }
         }
 
-        private void handleTextMessage(String message) {
-            String[] tokens = message.split(" ", 4);
-            if (tokens.length < 4) {
-                out.println("Formato correto: /send message <destinatario> <mensagem>");
-                return;
-            }
+        private void handleTextMessage() throws IOException {
+            String recipient = in.readUTF();
+            String textMessage = in.readUTF();
 
-            String recipient = tokens[2];
-            String textMessage = tokens[3];
-
-            //uma thread espera a outra para alterar o map
             synchronized (clients) {
                 if (clients.containsKey(recipient)) {
-                    try {
-                        //abre um OutputStream pro socket do destinatario
-                        PrintWriter recipientOut = new PrintWriter(clients.get(recipient).getOutputStream(), true);
-                        recipientOut.println(clientName + ": " + textMessage);
-                        out.println("Mensagem enviada para " + recipient + " com sucesso!");
-                        logMessage(clientName, recipient, textMessage);
+                    DataOutputStream recipientOut = new DataOutputStream(clients.get(recipient).getOutputStream());
+                    recipientOut.writeUTF(clientName + ": " + textMessage);
+                    recipientOut.flush();
 
-                    } catch (IOException e) {
-                        out.println("Erro ao enviar mensagem para " + recipient);
-                    }
+                    out.writeUTF("Mensagem enviada para " + recipient + " com sucesso!");
+                    out.flush();
+
+                    logMessage(clientName, recipient, textMessage);
                 } else {
-                    out.println("Usuário " + recipient + " não está conectado.");
+                    out.writeUTF("Usuário " + recipient + " não está conectado.");
+                    out.flush();
                 }
             }
         }
 
-
-        private void handleFileTransfer(String message) throws IOException {
-            String[] tokens = message.split(" ", 4);
-            if (tokens.length < 4) {
-                out.println("Formato incorreto: /send file <destinatario> <caminho do arquivo>");
-                return;
-            }
-
-            String recipient = tokens[2];
-            String fileName = tokens[3];
+        private void handleFileTransfer() throws IOException {
+            String recipient = in.readUTF();
+            String fileName = in.readUTF();
+            long fileSize = in.readLong();
 
             synchronized (clients) {
                 if (clients.containsKey(recipient)) {
                     try {
-                        InputStream socketIn = socket.getInputStream();
-                        saveReceivedFile(fileName, socketIn);
+                        // Ler os dados do arquivo do cliente remetente
+                        byte[] buffer = new byte[4096];
+                        long bytesReadTotal = 0;
 
-                        PrintWriter recipientOut = new PrintWriter(clients.get(recipient).getOutputStream(), true);
-                        recipientOut.println("Arquivo recebido: " + fileName);
+                        // Preparar para enviar ao destinatário
+                        Socket recipientSocket = clients.get(recipient);
+                        DataOutputStream recipientOut = new DataOutputStream(recipientSocket.getOutputStream());
 
-                        byte[] fileBytes = Files.readAllBytes(new File("arquivos_recebidos" + File.separator + fileName).toPath());
-                        OutputStream recipientStream = clients.get(recipient).getOutputStream();
-                        recipientStream.write(fileBytes);
-                        recipientStream.flush();
+                        // Informar ao destinatário que um arquivo está chegando
+                        recipientOut.writeUTF("Arquivo recebido");
+                        recipientOut.writeUTF(clientName);
+                        recipientOut.writeUTF(fileName);
+                        recipientOut.writeLong(fileSize);
 
-                        logMessage(clientName, recipient, "Arquivo enviado: " + fileName);
+                        // Transferir o arquivo
+                        while (bytesReadTotal < fileSize) {
+                            int bytesToRead = (int) Math.min(buffer.length, fileSize - bytesReadTotal);
+                            int bytesRead = in.read(buffer, 0, bytesToRead);
+                            if (bytesRead == -1) break;
+                            recipientOut.write(buffer, 0, bytesRead);
+                            bytesReadTotal += bytesRead;
+                        }
+                        recipientOut.flush();
+
+                        out.writeUTF("S: Arquivo enviado com sucesso.");
+                        out.flush();
+
+                        logMessage(clientName, recipient, "S: Arquivo enviado: " + fileName);
                     } catch (IOException e) {
-                        out.println("" + "Erro ao enviar o arquivo para " + recipient);
+                        out.writeUTF("S: Erro ao enviar o arquivo para " + recipient);
                     }
                 } else {
-                    out.println("Usuário " + recipient + " não está conectado.");
+                    out.writeUTF("Usuário " + recipient + " não está conectado.");
                 }
             }
         }
 
-        private void saveReceivedFile(String fileName, InputStream socketIn) {
-            createReceivedFilesDirectory();
-            File file = new File("arquivos_recebidos" + File.separator + fileName);
-
-            try (BufferedOutputStream fileOut = new BufferedOutputStream(new FileOutputStream(file))) {
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                while (socketIn.available() > 0 && (bytesRead = socketIn.read(buffer)) != -1) {
-                    fileOut.write(buffer, 0, bytesRead);
-                }
-                fileOut.flush();
-                System.out.println("Arquivo " + fileName + " salvo com sucesso em 'arquivos_recebidos'!");
-            } catch (IOException e) {
-                System.out.println("Erro ao salvar arquivo: " + e.getMessage());
-            }
-        }
-
-
-        private void createReceivedFilesDirectory() {
-            File receivedFilesDir = new File("arquivos_recebidos");
-            if (!receivedFilesDir.exists()) {
-                if (receivedFilesDir.mkdir()) {
-                    System.out.println("Diretório 'arquivos_recebidos' criado.");
-                }
-            }
-        }
-
-        private void listUsers() {
-            out.println("Usuários conectados:");
+        private void listUsers() throws IOException {
+            out.writeUTF("Usuários conectados:");
             synchronized (clients) {
                 for (String user : clients.keySet()) {
-                    out.println(user);
+                    out.writeUTF(user);
                 }
             }
+            out.flush();
         }
 
         private void broadcast(String message, Socket excludeSocket) throws IOException {
             synchronized (clients) {
                 for (Socket clientSocket : clients.values()) {
                     if (clientSocket != excludeSocket) {
-                        PrintWriter clientOut = new PrintWriter(clientSocket.getOutputStream(), true);
-                        clientOut.println(message);
+                        DataOutputStream clientOut = new DataOutputStream(clientSocket.getOutputStream());
+                        clientOut.writeUTF(message);
+                        clientOut.flush();
                     }
                 }
             }
