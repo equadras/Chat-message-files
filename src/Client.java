@@ -4,7 +4,7 @@ import java.util.Scanner;
 
 public class Client {
     public static void main(String[] args) throws IOException {
-        Socket socket = new Socket("127.0.0.1", 12345);
+        Socket socket = new Socket("10.20.180.205", 12345);
         System.out.println("Cliente conectado ao servidor!");
 
         // Exibir os comandos
@@ -113,10 +113,10 @@ class SendToServer implements Runnable {
                     socket.close();
                     break;
                 } else if (message.startsWith("/send message")) {
-                    String[] tokens = message.split(" ", 3);
-                    if (tokens.length >= 3) {
-                        String recipient = tokens[1];
-                        String textMessage = tokens[2];
+                    String[] tokens = message.split(" ", 4);
+                    if (tokens.length >= 4) {
+                        String recipient = tokens[2];
+                        String textMessage = tokens[3];
 
                         out.writeUTF("/send message");
                         out.writeUTF(recipient);
