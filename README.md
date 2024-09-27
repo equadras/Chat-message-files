@@ -19,8 +19,8 @@ Este projeto implementa um aplicativo de conversas instantâneas utilizando sock
 ### 1. Clonar o Repositório
 
 ```bash
-git clone https://github.com/equadras/Chat-message-files.git
-cd Chat-message-files
+git clone https://github.com/equadras/ChatApp.git
+cd ChatApp
 ```
 
 ### 2. Compilar os Fontes
